@@ -81,23 +81,7 @@ set(
 
 ### JP: cu ファイルを ptx ファイルへコンパイル
 
-# JP: optix が見つかっていれば，optixir に変換する．
-# JP: そうでなければ，ptx に変換するプログラム群に optixir に変換しようとしていたものも含める．
-if(OptiX9_FOUND)
-    set(USE_OPTIX_IR TRUE)
-else()
-    set(
-        ${CUDA_KERNELS}
-        ${CUDA_KERNELS}
-        ${OPTIX_KERNELS}
-    )
-    set(OPTIX_KERNELS)
-endif()
-
 # JP: .cu ファイルをコンパイルするのに必要なヘッダファイルたち
-set(
-    GPU_KERNEL_DEPENDENCIES
-)
 
 # # JP: .cu ファイルを .ptx ファイルにコンパイル (実装は nvcuda_compile_module.cmake モジュール内)
 # set(CUDA_NVCC_OPTIONS
@@ -135,13 +119,14 @@ set_target_properties(
 target_include_directories(
     rainbow_cuda_module
     PRIVATE
-        $"{CMAKE_CURRENT_SOURCE_DIR}/include"   
-        $"{CMAKE_CURRENT_SOURCE_DIR}/device"   
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"   
+        "${CMAKE_CURRENT_SOURCE_DIR}/device"   
 )
 
 add_dependencies(
     ${PROJECT_NAME}
     rainbow_cuda_module
+    rainbow_optix_module
 )
 
 # nvcuda_compile_ptx(
@@ -159,65 +144,58 @@ add_dependencies(
 ### JP: cu ファイルを .optixir ファイルにコンパイル
 
 # JP: .cu ファイルを .optixir ファイルにコンパイル (実装は nvcuda_compile_module.cmake モジュール内) 
-if(USE_OPTIX_IR)
-    # set(OPTIX_NVCC_OPTIONS
-    #     "--generate-line-info"                      # JP: 行番号を付与し，デバッグツール等でどの行が実行中か追跡可能にするオプション
-    #     "--gpu-architecture=compute_${CUDA_CC}"     # JP: GPU の構成
-    #     "-std=${CPP_VER_CUDA}"
-    #     "-cudart" "shared"
-    #     # "--use_fast_math"                           # JP: 精度を犠牲に高速な近似計算を実行
-    #     "--relocatable-device-code=true"
-    #     "-I${OPTIX_INCLUDE_DIR}"
+# set(OPTIX_NVCC_OPTIONS
+#     "--generate-line-info"                      # JP: 行番号を付与し，デバッグツール等でどの行が実行中か追跡可能にするオプション
+#     "--gpu-architecture=compute_${CUDA_CC}"     # JP: GPU の構成
+#     "-std=${CPP_VER_CUDA}"
+#     "-cudart" "shared"
+#     # "--use_fast_math"                           # JP: 精度を犠牲に高速な近似計算を実行
+#     "--relocatable-device-code=true"
+#     "-I${OPTIX_INCLUDE_DIR}"
+# )
+
+# if(CMAKE_BUILD_TYPE STREQUAL "Debug") # JP: Debug ビルドのときだけ
+#     list(APPEND 
+#         OPTIX_NVCC_OPTIONS
+#         "-D_DEBUG=1"             # JP: _DEBUG を定義
+#         "-G"                     # JP: GPU のデバッグ情報を含める                    
+#         "-O0"                    # JP: 最適化を無効化 
+#     )
+# endif()
+
+add_library(
+    rainbow_optix_module
+    OBJECT
+        device/optix_programs.cu
+)
+
+set_target_properties(
+    rainbow_optix_module
+    PROPERTIES
+        CUDA_OPTIX_COMPILATION ON   
+)
+
+target_include_directories(
+    rainbow_optix_module
+    PRIVATE
+        "${OPTIX91_INCLUDE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"   
+        "${CMAKE_CURRENT_SOURCE_DIR}/device"   
+)
+
+target_include_directories(
+    ${PROJECT_NAME}
+    PRIVATE
+        "${OPTIX91_INCLUDE_DIR}"   
+)
+
+# nvcuda_compile_optix_ir(
+# SOURCES ${OPTIX_KERNELS}
+# DEPENDENCIES ${GPU_KERNEL_DEPENDENCIES}
+# TARGET_PATH "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${CONFIG}/ptxes"
+# GENERATED_FILES OPTIX_PTXES
+# NVCC_OPTIONS ${OPTIX_NVCC_OPTIONS}
     # )
-
-    # if(CMAKE_BUILD_TYPE STREQUAL "Debug") # JP: Debug ビルドのときだけ
-    #     list(APPEND 
-    #         OPTIX_NVCC_OPTIONS
-    #         "-D_DEBUG=1"             # JP: _DEBUG を定義
-    #         "-G"                     # JP: GPU のデバッグ情報を含める                    
-    #         "-O0"                    # JP: 最適化を無効化 
-    #     )
-    # endif()
-    
-    add_library(
-        rainbow_optix_module
-        OBJECT
-            device/optix_programs.cu
-    )
-
-    set_target_properties(
-        rainbow_optix_module
-        PROPERTIES
-            CUDA_OPTIX_COMPILATION ON   
-    )
-
-    target_include_directories(
-        rainbow_optix_module
-        PRIVATE
-            "${OPTIX91_INCLUDE_DIR}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/include"   
-            "${CMAKE_CURRENT_SOURCE_DIR}/device"   
-    )
-
-    target_include_directories(
-        ${PROJECT_NAME}
-        PRIVATE
-            "${OPTIX91_INCLUDE_DIR}"   
-    )
-
-    add_dependencies(
-        ${PROJECT_NAME}
-        rainbow_optix_module
-    )
-
-    # nvcuda_compile_optix_ir(
-    # SOURCES ${OPTIX_KERNELS}
-    # DEPENDENCIES ${GPU_KERNEL_DEPENDENCIES}
-    # TARGET_PATH "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${CONFIG}/ptxes"
-    # GENERATED_FILES OPTIX_PTXES
-    # NVCC_OPTIONS ${OPTIX_NVCC_OPTIONS}
-    # )
-endif()
 
 
 # JP: ビルドした結果をまとめる
@@ -275,7 +253,7 @@ if (MSVC)
         PRIVATE
             $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>
             $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Zc:__cplusplus>
-            $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Zc:W4>
+            $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/W4>
     )
 endif()
 

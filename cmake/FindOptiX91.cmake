@@ -40,7 +40,7 @@ find_path(
 include(FindPackageHandleStandardArgs)  # 標準で搭載されている便利なモジュール：https://cmake.org/cmake/help/latest/module/FindPackageHandleStandardArgs.html
 find_package_handle_standard_args(
     OPTIX91                  # パッケージ名
-    DEFAULT_MSG             # エラーメッセージの表示方法
-    OPTIX91_INCLUDE_DIR      # 結果として使う関数
+    REQUIRED_VARS
+        OPTIX91_INCLUDE_DIR      # 結果として使う関数
     )
 mark_as_advanced(OPTIX91_INCLUDE_DIR) # GUI 上には表示しない
