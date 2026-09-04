@@ -63,105 +63,27 @@ find_package(OptiX91 REQUIRED)
 set(USE_OPTIX_IR FALSE)
 set(CUDA_CC ${CMAKE_CUDA_ARCHITECTURES})
 
-### JP: コンパイルするファイルを列挙
-
-set(DEVICE_PROGRAMS_PATH ${PROJECT_SOURCE_DIR}/device)  # プログラムの所在
-
-# JP: ptx ファイルに変換したいファイル群
-# ${DEVICE_PROGRAMS_PATH}/.../.cu
-set(
-    CUDA_KERNELS
-)
-
-# JP: optixir に変換したいファイル群
-# ${DEVICE_PROGRAMS_PATH}/.../.cu
-set(
-    OPTIX_KERNELS
-)
-
 ### JP: cu ファイルを ptx ファイルへコンパイル
 
-# JP: .cu ファイルをコンパイルするのに必要なヘッダファイルたち
-
-# # JP: .cu ファイルを .ptx ファイルにコンパイル (実装は nvcuda_compile_module.cmake モジュール内)
-# set(CUDA_NVCC_OPTIONS
-#     "-Xcompiler" "\"/utf-8 /Zc:__cplusplus\""   # JP: 警告無視，標準準拠オプション
-#     "--generate-line-info"                      # JP: 行番号を付与し，デバッグツール等でどの行が実行中か追跡可能にするオプション
-#     "--gpu-architecture=compute_${CUDA_CC}"     # JP: GPU の構成
-#     "--gpu-code=sm_${CUDA_CC}" 
-#     "-std=${CPP_VER_CUDA}"                  
-#     "-cudart" "shared"
-#     # "--use_fast_math"                           # JP: 精度を犠牲に高速な近似計算を実行
-#     "--relocatable-device-code=true"
-#     "-I${OPTIX_INCLUDE_DIR}"
-# )
-
-# if(CMAKE_BUILD_TYPE STREQUAL "Debug")   # JP: Debug ビルドのときだけ
-#     list(APPEND 
-#         CUDA_NVCC_OPTIONS
-#         "-D_DEBUG=1"                    # JP: _DEBUG を定義
-#         "-G"                            # JP: GPU のデバッグ情報を含める                    
-#     )
-# endif()
 
 add_library(
-    rainbow_cuda_module
+    rainbow_patch_build
     OBJECT
-        device/kernels.cu
+        device/patch_build.cu
 )
 
 set_target_properties(
-    rainbow_cuda_module
+    rainbow_patch_build
     PROPERTIES
         CUDA_FATBIN_COMPILATION ON
 )
 
 target_include_directories(
-    rainbow_cuda_module
+    rainbow_patch_build
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"   
         "${CMAKE_CURRENT_SOURCE_DIR}/device"   
 )
-
-add_dependencies(
-    ${PROJECT_NAME}
-    rainbow_cuda_module
-    rainbow_optix_module
-)
-
-# nvcuda_compile_ptx(
-#     SOURCES ${CUDA_KERNELS}
-#     DEPENDENCIES ${GPU_KERNEL_DEPENDENCIES}
-#     # JP: 例えば build/Debug/ptxes　以下に .ptx ファイルが生成
-#     TARGET_PATH "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${CONFIG}/ptxes"
-#     GENERATED_FILES CUDA_PTXES
-#     NVCC_OPTIONS ${CUDA_NVCC_OPTIONS}
-# )
-
-# message(STATUS "CUDA_KERNELS=${CUDA_KERNELS}")
-
-
-### JP: cu ファイルを .optixir ファイルにコンパイル
-
-# JP: .cu ファイルを .optixir ファイルにコンパイル (実装は nvcuda_compile_module.cmake モジュール内) 
-# set(OPTIX_NVCC_OPTIONS
-#     "--generate-line-info"                      # JP: 行番号を付与し，デバッグツール等でどの行が実行中か追跡可能にするオプション
-#     "--gpu-architecture=compute_${CUDA_CC}"     # JP: GPU の構成
-#     "-std=${CPP_VER_CUDA}"
-#     "-cudart" "shared"
-#     # "--use_fast_math"                           # JP: 精度を犠牲に高速な近似計算を実行
-#     "--relocatable-device-code=true"
-#     "-I${OPTIX_INCLUDE_DIR}"
-# )
-
-# if(CMAKE_BUILD_TYPE STREQUAL "Debug") # JP: Debug ビルドのときだけ
-#     list(APPEND 
-#         OPTIX_NVCC_OPTIONS
-#         "-D_DEBUG=1"             # JP: _DEBUG を定義
-#         "-G"                     # JP: GPU のデバッグ情報を含める                    
-#         "-O0"                    # JP: 最適化を無効化 
-#     )
-# endif()
 
 add_library(
     rainbow_optix_module
@@ -189,14 +111,6 @@ target_include_directories(
         "${OPTIX91_INCLUDE_DIR}"   
 )
 
-# nvcuda_compile_optix_ir(
-# SOURCES ${OPTIX_KERNELS}
-# DEPENDENCIES ${GPU_KERNEL_DEPENDENCIES}
-# TARGET_PATH "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${CONFIG}/ptxes"
-# GENERATED_FILES OPTIX_PTXES
-# NVCC_OPTIONS ${OPTIX_NVCC_OPTIONS}
-    # )
-
 
 # JP: ビルドした結果をまとめる
 set(BUILD_CUDA_KERNELS
@@ -216,6 +130,12 @@ add_executable(
     apps/main.cpp 
     src/cuda_driver.cpp 
     "${BUILD_CUDA_KERNELS}"
+)
+
+add_dependencies(
+    ${PROJECT_NAME}
+    rainbow_cuda_module
+    rainbow_optix_module
 )
 
 # JP: インクルードパスの追加
