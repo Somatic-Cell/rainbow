@@ -182,6 +182,20 @@ target_include_directories(
 # Build ordering
 # -----------------------------------------------------------------------------
 
+foreach(
+    cuda_module_target
+    IN ITEMS
+        rainbow_patch_build_module
+        rainbow_raindrop_trace_module
+        rainbow_patch_query_module
+)
+    target_compile_options(
+        ${cuda_module_target}
+        PRIVATE
+            $<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:-Xcompiler=/utf-8>
+    )
+endforeach()
+
 # .fatbin と 2 個の .optixir を Rainbow.exe より先に生成する．
 # これらは実行時にロードする module であり，実行ファイルへリンクしない．
 add_dependencies(
@@ -189,6 +203,23 @@ add_dependencies(
     rainbow_patch_build_module
     rainbow_raindrop_trace_module
     rainbow_patch_query_module
+)
+
+add_custom_command(
+    TARGET ${PROJECT_NAME}
+    POST_BUILD
+
+    COMMAND
+        ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/modules"
+    
+    COMMAND
+        "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_OBJECTS:rainbow_patch_build_module>"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/modules/patch_build.fatbin"
+
+    COMMAND_EXPAND_LISTS
+    VERBATIM
 )
 
 
