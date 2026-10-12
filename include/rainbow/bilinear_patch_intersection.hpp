@@ -1,6 +1,7 @@
 #pragma once
 
 #include <rainbow/patch_geometry.hpp>
+#include <rainbow/bilinear_patch_boundary.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -11,14 +12,23 @@ namespace rainbow
 
 // 保存された四隅を結ぶ「正規化しない」双線形面と，原点からの半直線の交差．
 // 二つの孤立解を両方返す．面を三角形に置換しない．
-// 共有辺は閉区間として保持する．Boundary フラグは光学合成前の ownership 処理を要求する．
+// 共有辺は閉区間として保持する．正確な辺の情報を残し，収集後に同じ入射格子の
+// feature だけを一意の owner に割り当てる．異なる波面の重なりは除去しない．
 enum BilinearHitFlags : std::uint32_t
 {
     BilinearHitNone = 0,
     BilinearBoundary = 1u << 0,
     BilinearSingular = 1u << 1,
-    BilinearUsedFp64 = 1u << 2
+    BilinearUsedFp64 = 1u << 2,
+    // Bits 3..6 encode BilinearPatchEdge, certified from the original corners.
+    // They are NEVER inferred from u/v after packing into binary32.
+    BilinearBoundaryOwned = 1u << 7 // Set only after topological ownership.
 };
+inline constexpr unsigned bilinear_boundary_edge_shift = 3;
+inline constexpr std::uint32_t bilinear_boundary_edge_mask = 0xfu << bilinear_boundary_edge_shift;
+inline constexpr std::uint32_t bilinear_known_hit_flags =
+    BilinearBoundary | BilinearSingular | BilinearUsedFp64
+    | bilinear_boundary_edge_mask | BilinearBoundaryOwned;
 
 enum BilinearQueryFlags : std::uint32_t
 {
@@ -252,8 +262,34 @@ template<class T> HOST_DEVICE Attempt<T> solve(
         if(parameter_error>T(1e-5) && !repeated) {out.retry=true;continue;}
         if(u<-parameter_error || u>T(1)+parameter_error
            || v<-parameter_error || v>T(1)+parameter_error) continue;
-        const bool boundary=u<=parameter_error || u>=T(1)-parameter_error
-                         || v<=parameter_error || v>=T(1)-parameter_error;
+        bool boundary=u<=parameter_error || u>=T(1)-parameter_error
+                   || v<=parameter_error || v>=T(1)-parameter_error;
+        std::uint32_t exact_edges=0;
+        if constexpr(std::is_same_v<T,double>)
+        {
+            if(boundary && !repeated)
+            {
+                // The numerical root's error band is not proof of an edge.
+                // For a certified regular map, use exact signs of the four
+                // ORIGINAL binary32 edge planes to distinguish in/out/on.
+                // Folded/uncertified maps retain their existing pending path.
+                const int orientation=RegularPatch64::certified_orientation(geometry.corners);
+                const auto location=BilinearPatchBoundary::classify_regular(
+                    geometry.corners,direction,orientation);
+                if(location.membership==BilinearBoundaryMembership::Outside) continue;
+                if(location.membership==BilinearBoundaryMembership::Interior) boundary=false;
+                if(location.membership==BilinearBoundaryMembership::Boundary)
+                {
+                    exact_edges=location.edges;
+                    // These coordinates are mathematically equal to endpoints;
+                    // this does not jitter the ray or widen patch membership.
+                    if(exact_edges&BilinearEdgeU0) u=T(0);
+                    if(exact_edges&BilinearEdgeU1) u=T(1);
+                    if(exact_edges&BilinearEdgeV0) v=T(0);
+                    if(exact_edges&BilinearEdgeV1) v=T(1);
+                }
+            }
+        }
         if(u<T(0) || u>T(1)) u=clamp_unit(u);
         if(v<T(0) || v>T(1)) v=clamp_unit(v);
         const auto residual=a+b*u+c*v+d*(u*v);
@@ -273,7 +309,7 @@ template<class T> HOST_DEVICE Attempt<T> solve(
         // FP64 coordinate can round to 1.0f without lying on a shared edge.
         // Preserve the pre-packing boundary decision and the residual check.
         if(boundary)
-            hit.flags|=BilinearBoundary;
+            hit.flags|=BilinearBoundary | (exact_edges << bilinear_boundary_edge_shift);
         if(repeated) hit.flags|=BilinearSingular;
         if constexpr(std::is_same_v<T,double>) hit.flags|=BilinearUsedFp64;
         const Vec3 error3=geometry.evaluate(hit.u,hit.v)-direction*hit.t;

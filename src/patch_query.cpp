@@ -197,6 +197,8 @@ void PatchQuery::query(const PatchAccel& source,std::span<const Vec3> directions
         statistics_.error_directions+=(s.flags&patch_query_error_mask)!=0;
         statistics_.refinement_directions+=(s.flags&PatchQueryRefinementHit)!=0;
         statistics_.boundary_directions+=(s.flags&PatchQueryBoundaryHit)!=0;
+        statistics_.boundary_resolved_directions+=(s.flags&PatchQueryBoundaryResolved)!=0;
+        statistics_.boundary_reports_removed+=s.boundary_reports_removed();
         statistics_.fp64_directions+=(s.flags&PatchQueryFp64Used)!=0;
         statistics_.max_hits=(std::max)(statistics_.max_hits,s.hit_count);
     }

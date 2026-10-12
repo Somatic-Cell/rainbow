@@ -76,13 +76,16 @@ PatchFailureReport PatchFailureReport::capture(
         throw std::invalid_argument("Patch audit: incident-state representation mismatch.");
     const auto* grid=query.direction_grid();
     const auto n=query.host_summaries().size();
+    const bool host_results=optics.has_host_result();
     if(grid->size()!=n || n!=query.host_directions().size() || query.host_offsets().size()!=n+1
-       || optics.host_results().size()!=n || optics.host_focal_results().size()!=n
-       || optics.host_diffraction_results().size()!=n
+       || optics.results().element_count()!=n || optics.focal_results().element_count()!=n
+       || optics.diffraction_results().element_count()!=n
+       || (host_results && (optics.host_results().size()!=n || optics.host_focal_results().size()!=n
+                            || optics.host_diffraction_results().size()!=n))
        || config.grid_width!=source.layout().grid_width || config.grid_height!=source.layout().grid_height)
         throw std::invalid_argument("Patch audit: source/result layout mismatch.");
     context.make_current();
-    // evaluate_wave() already synchronizes; this explicit boundary also protects
+    // Both wave evaluation modes synchronize; this explicit boundary also protects
     // sparse readback if a future implementation changes its blocking behavior.
     RAINBOW_CUDA_CHECK(cuStreamSynchronize(context.stream()));
     PatchFailureSnapshot result{};
@@ -98,6 +101,20 @@ PatchFailureReport PatchFailureReport::capture(
     std::map<std::uint32_t,OutgoingVertex> vertex_cache;
     std::map<std::uint32_t,Field32> second_cache;
     std::set<std::uint32_t> wanted_compact,problem_ids;
+    // Device-only generation deliberately has no full optical host copy. Scan
+    // those already-computed results in bounded chunks and retain only failed
+    // directions. This is diagnostic readback, never another optical evaluation.
+    // The legacy host-backed path below performs no additional result scan.
+    constexpr std::size_t scan_capacity=4096;
+    std::vector<PatchOpticalResult> optical_chunk;
+    std::vector<FocalOpticalResult> focal_chunk;
+    std::vector<DiffractionResult> diffraction_chunk;
+    if(!host_results)
+    {
+        const auto capacity=n<scan_capacity?n:scan_capacity;
+        optical_chunk.resize(capacity);focal_chunk.resize(capacity);diffraction_chunk.resize(capacity);
+    }
+    std::size_t chunk_begin=0,chunk_end=0;
     const auto read_patch=[&](const std::uint32_t compact)->const OutgoingPatch&
     {
         auto it=patch_cache.find(compact);
@@ -110,10 +127,22 @@ PatchFailureReport PatchFailureReport::capture(
     };
     for(std::size_t i=0;i<n;++i)
     {
+        if(!host_results && i==chunk_end)
+        {
+            chunk_begin=i;
+            const auto count=n-i<scan_capacity?n-i:scan_capacity;
+            reader.read(optics.results().address(),optics.results().element_count(),i,
+                        std::span<PatchOpticalResult>{optical_chunk.data(),count});
+            reader.read(optics.focal_results().address(),optics.focal_results().element_count(),i,
+                        std::span<FocalOpticalResult>{focal_chunk.data(),count});
+            reader.read(optics.diffraction_results().address(),optics.diffraction_results().element_count(),i,
+                        std::span<DiffractionResult>{diffraction_chunk.data(),count});
+            chunk_end=i+count;
+        }
         const auto& q=query.host_summaries()[i];
-        const auto& o=optics.host_results()[i];
-        const auto& f=optics.host_focal_results()[i];
-        const auto& d=optics.host_diffraction_results()[i];
+        const auto& o=host_results?optics.host_results()[i]:optical_chunk[i-chunk_begin];
+        const auto& f=host_results?optics.host_focal_results()[i]:focal_chunk[i-chunk_begin];
+        const auto& d=host_results?optics.host_diffraction_results()[i]:diffraction_chunk[i-chunk_begin];
         const bool qe=(q.flags&patch_query_error_mask)!=0u;
         const bool op=!o.known_hits_complete(), fp=!f.valid(), dp=!d.valid();
         const bool nf=!finite_optical(o)||!finite_focal(f)

@@ -11,6 +11,11 @@ rainbow_configure_host(rainbow_phase_dataset)
 add_executable(rainbow_generate "${PROJECT_SOURCE_DIR}/apps/generate_phase.cpp")
 target_link_libraries(rainbow_generate PRIVATE rainbow_phase_dataset)
 rainbow_configure_host(rainbow_generate)
+target_compile_definitions(rainbow_generate PRIVATE
+    RAINBOW_ENABLE_DIAGNOSTICS=$<BOOL:${RAINBOW_ENABLE_DIAGNOSTICS}>)
+if(RAINBOW_ENABLE_DIAGNOSTICS)
+    target_link_libraries(rainbow_generate PRIVATE rainbow_diagnostics)
+endif()
 
 # Provenance at configure time, including untracked source files. Not a claim
 # that a dirty build is identical to the named commit.

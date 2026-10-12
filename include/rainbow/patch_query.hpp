@@ -17,6 +17,8 @@ struct PatchQueryStatistics
     std::uint64_t allocated_hits=0, hits=0;
     std::uint32_t directions=0, nonempty_directions=0, error_directions=0;
     std::uint32_t refinement_directions=0, boundary_directions=0, fp64_directions=0;
+    std::uint32_t boundary_resolved_directions=0;
+    std::uint64_t boundary_reports_removed=0;
     std::uint32_t max_hits=0;
     std::uint64_t missing_source_cells=0, no_outgoing_source_cells=0;
 };
