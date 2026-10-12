@@ -10,10 +10,18 @@
 #include <rainbow/water_refractive_index.hpp>
 #include <rainbow/projected_area.hpp>
 
+#ifndef RAINBOW_ENABLE_DIAGNOSTICS
+#define RAINBOW_ENABLE_DIAGNOSTICS 0
+#endif
+#if RAINBOW_ENABLE_DIAGNOSTICS
+#include <rainbow/patch_failure_report.hpp>
+#endif
+
 #include <array>
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -49,7 +57,7 @@ struct Command
     bool wavelength_given=false, index_given=false, state_given=false;
     bool has_paper_sigma=false;
     double paper_primary_sigma_degrees=0.0;
-    std::filesystem::path modules, output;
+    std::filesystem::path modules, output, patch_failure_report;
     std::uint32_t theta=360,phi=720;
     PhaseDensityStage stage=PhaseDensityStage::Diffraction;
     int device=0;
@@ -81,6 +89,49 @@ const char* stage_name(PhaseDensityStage s)
         default: throw std::invalid_argument("Invalid optical stage.");
     }
 }
+// Resolve existing parent aliases even though the output leaves must be new.
+// On Windows, also compare native path components without ASCII case aliases.
+bool path_component_equal(const std::filesystem::path& a,const std::filesystem::path& b)
+{
+#if defined(_WIN32)
+    const auto& x=a.native();const auto& y=b.native();
+    if(x.size()!=y.size())return false;
+    for(std::size_t i=0;i<x.size();++i)
+        if(std::towlower(x[i])!=std::towlower(y[i]))return false;
+    return true;
+#else
+    return a==b;
+#endif
+}
+bool within_path(const std::filesystem::path& child,const std::filesystem::path& parent)
+{
+    auto c=child.begin();
+    for(auto p=parent.begin();p!=parent.end();++p,++c)
+        if(c==child.end() || !path_component_equal(*c,*p))return false;
+    return true;
+}
+void validate_report_path(const Command& c)
+{
+    if(c.patch_failure_report.empty())return;
+    if(c.patch_failure_report.filename().empty())
+        throw std::invalid_argument("--patch-failure-report must name a new file, not a directory.");
+    if(c.stage!=PhaseDensityStage::Focal && c.stage!=PhaseDensityStage::Diffraction)
+        throw std::invalid_argument("--patch-failure-report requires --stage focal or diffraction.");
+    auto report_part=c.patch_failure_report;report_part+=".part";
+    if(std::filesystem::exists(std::filesystem::symlink_status(c.patch_failure_report))
+       ||std::filesystem::exists(std::filesystem::symlink_status(report_part)))
+        throw std::invalid_argument("Choose a new --patch-failure-report path (report or .part already exists).");
+    const auto report=std::filesystem::weakly_canonical(std::filesystem::absolute(c.patch_failure_report));
+    const auto temporary=std::filesystem::weakly_canonical(std::filesystem::absolute(report_part));
+    const auto output=std::filesystem::weakly_canonical(std::filesystem::absolute(c.output));
+    auto output_part=c.output;output_part+=".part";
+    const auto staging=std::filesystem::weakly_canonical(std::filesystem::absolute(output_part));
+    for(const auto& file:{report,temporary})for(const auto& directory:{output,staging})
+        if(within_path(file,directory)||within_path(directory,file))
+            throw std::invalid_argument("Report and its .part file must be separate from --out and the dataset .part directory.");
+    if(!std::filesystem::is_directory(report.parent_path()))
+        throw std::invalid_argument("The --patch-failure-report parent directory must already exist.");
+}
 template<class Char> Command parse(int argc,Char** argv)
 {
     Command c;c.settings.radius_mm=1.0f;c.settings.grid_width=c.settings.grid_height=513;
@@ -105,12 +156,26 @@ template<class Char> Command parse(int argc,Char** argv)
                          "  --cdf-max-l1 E --cdf-max-lost-mass E --device ORDINAL\n"
                          "  --cdf-theta T --cdf-phi P (integer divisors of query dimensions)\n"
                          "  --max-coarsening-tv E (quality policy, not a blur width)\n"
+                         "  --patch-failure-report NEW.json (requires diagnostics build; focal/diffraction)\n"
                          "  No additional/global storage Gaussian is applied.\n";
             return {};
         }
         if(++i>=argc) throw std::invalid_argument("Missing option value.");
         if(option=="--out") {c.output=std::filesystem::path(argv[i]);continue;}
         if(option=="--modules") {c.modules=std::filesystem::path(argv[i]);continue;}
+        if(option=="--patch-failure-report")
+        {
+#if RAINBOW_ENABLE_DIAGNOSTICS
+            if(!c.patch_failure_report.empty())
+                throw std::invalid_argument("Duplicate --patch-failure-report.");
+            c.patch_failure_report=std::filesystem::path(argv[i]);
+            if(c.patch_failure_report.empty())
+                throw std::invalid_argument("--patch-failure-report needs a new file path.");
+            continue;
+#else
+            throw std::invalid_argument("Detailed reports are disabled. Rebuild with -DRAINBOW_ENABLE_DIAGNOSTICS=ON.");
+#endif
+        }
         const auto value=std::filesystem::path(argv[i]).string();
         if(option=="--radius-mm") c.settings.radius_mm=static_cast<float>(number(value));
         else if(option=="--wavelength-nm")
@@ -219,6 +284,7 @@ template<class Char> Command parse(int argc,Char** argv)
     if(std::filesystem::exists(c.output)) throw std::runtime_error("Output already exists.");
     auto partial=c.output;partial+=".part";
     if(std::filesystem::exists(partial)) throw std::runtime_error("Previous .part directory exists; inspect it before recomputing.");
+    validate_report_path(c);
     return c;
 }
 using D3=std::array<double,3>;
@@ -351,6 +417,7 @@ void write_metadata(const std::filesystem::path& path,const Command& c,
        <<",\n  \"diffraction_zero_setting_selects_Table_II\": true,\n"
        <<"  \"diffraction_transition_contrast\": "<<c.wave.transition_contrast<<",\n"
        <<"  \"folded_branch_model\": \"finite_branch_area_ratio_v1\",\n"
+       <<"  \"shared_patch_boundary_policy\": \"exact_fp32_edge_planes_regular_same_orientation_min_patch_id_v1\",\n"
        <<"  \"folded_relative_tolerance\": "<<folded.relative_tolerance<<",\n"
        <<"  \"source_commit\": \""<<RAINBOW_SOURCE_COMMIT<<"\",\n"
        <<"  \"source_dirty_at_configure\": "<<(RAINBOW_SOURCE_DIRTY?"true":"false")<<",\n"
@@ -432,11 +499,47 @@ template<class Char> int run(int argc,Char** argv)
     cdf.validate_trace(tracer); // Small GPU reduction, no vertex CSV or bulk readback.
     patches.build(tracer);
     query.query_grid(patches,tracer.config(),c.theta,c.phi);
+    const auto& query_stats=query.statistics();
+    if(query_stats.boundary_resolved_directions || query_stats.boundary_directions)
+        std::cout<<"Patch boundary ownership: resolved_directions="<<query_stats.boundary_resolved_directions
+            <<" duplicate_reports_removed="<<query_stats.boundary_reports_removed
+            <<" pending_directions="<<query_stats.boundary_directions<<'\n';
     if(query.statistics().error_directions)throw std::runtime_error("Patch query has numerical failures.");
     if(c.stage==PhaseDensityStage::Incoherent || c.stage==PhaseDensityStage::Path)
         optics.evaluate_device(patches,query,tracer.config());
     else optics.evaluate_wave_device(patches,query,tracer.config(),c.wave);
+#if RAINBOW_ENABLE_DIAGNOSTICS
+    const auto write_requested_report=[&]
+    {
+        if(c.patch_failure_report.empty())return;
+        // Read the SAME device result used by CDF construction. Do not retrace,
+        // rerun optics, replace flags, or switch to the legacy CSV CLI.
+        const auto report=PatchFailureReport::capture(
+            context,patches,query,optics,tracer.config(),c.wave);
+        report.write_json(c.patch_failure_report);
+        std::cout<<"Patch failure report: directions="<<report.snapshot().directions.size()
+            <<", patches="<<report.snapshot().patches.size()
+            <<", gpu_read_bytes="<<report.snapshot().gpu_read_bytes
+            <<"; saved="<<c.patch_failure_report<<'\n';
+    };
+    try
+    {
+        cdf.build(optics,c.theta,c.phi,c.stage,c.policy,c.storage);
+    }
+    catch(...)
+    {
+        // A failed diagnostic write must not replace the original CDF failure.
+        try {write_requested_report();}
+        catch(const std::exception& e)
+        {std::cerr<<"Patch failure report could not be saved: "<<e.what()<<'\n';}
+        catch(...)
+        {std::cerr<<"Patch failure report could not be saved: unknown diagnostic failure.\n";}
+        throw;
+    }
+    write_requested_report();
+#else
     cdf.build(optics,c.theta,c.phi,c.stage,c.policy,c.storage);
+#endif
     DatasetDirectory destination(c.output);
     cdf.write_arrays(destination.staging());
     write_metadata(destination.staging()/"metadata.json",c,tracer.config(),patches,cdf,projected_area);

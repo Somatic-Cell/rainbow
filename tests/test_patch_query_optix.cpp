@@ -85,6 +85,44 @@ int run(const std::filesystem::path& build_module,const std::filesystem::path& q
                 "Repeated query deterministic ordering/value.");
         }
     }
+    // Two distinct path families, each with four regular patches sharing a
+    // source-grid corner. GPU count/fill must keep all closed hits long enough
+    // to choose one source-feature owner per family, with no traversal tie.
+    config.grid_width=config.grid_height=3;
+    host.assign(4u*9u,OutgoingVertex{});
+    for(auto& vertex:host) vertex.status=VertexStatus::Miss;
+    for(unsigned family=0;family<2;++family)
+        for(unsigned y=0;y<3;++y) for(unsigned x=0;x<3;++x)
+        {
+            auto& vertex=host[family*9u+y*3u+x];
+            vertex.direction_drop=Vec3{(float(x)-1.0f)*0.125f,(float(y)-1.0f)*0.125f,1}.normalized();
+            vertex.basis_x=TransverseFrame::from_direction(vertex.direction_drop).e0;
+            vertex.field.x={1,0};vertex.status=VertexStatus::Valid;
+        }
+    vertices.close(); // All preceding queries are synchronized; allocate the larger fixture.
+    vertices.allocate(host.size());
+    vertices.upload_async(std::span<const OutgoingVertex>{host},cuda.stream());
+    RAINBOW_CUDA_CHECK(cuStreamSynchronize(cuda.stream()));
+    accel.build(vertices,config);
+    const std::vector<Vec3> boundary_directions={{0,0,1},Vec3{0.0625f,0,1}.normalized()};
+    query.query(accel,boundary_directions);
+    const auto owned_hits=query.download_hits();
+    require_query(query.statistics().error_directions==0 && query.statistics().boundary_directions==0,
+                  "GPU shared regular boundaries remained pending or erroneous.");
+    for(unsigned i=0;i<boundary_directions.size();++i)
+    {
+        const auto& summary=query.host_summaries()[i];
+        require_query(summary.hit_count==2 && (summary.flags&PatchQueryBoundaryResolved),
+                      "GPU ownership removed an independent path family or retained a duplicate.");
+        require_query(summary.boundary_reports_removed()==(i==0?6u:2u),
+                      "GPU shared-corner/shared-edge duplicate accounting.");
+        for(unsigned family=0;family<2;++family)
+        {
+            const auto& hit=owned_hits[std::size_t(query.host_offsets()[i])+family];
+            require_query(hit.patch_id==family*4u+i && (hit.flags&BilinearBoundaryOwned),
+                          "GPU boundary owner is not the smallest source patch ID.");
+        }
+    }
     for(auto& v:host)v.status=VertexStatus::Miss;
     vertices.upload_async(std::span<const OutgoingVertex>{host},cuda.stream());
     RAINBOW_CUDA_CHECK(cuStreamSynchronize(cuda.stream()));

@@ -32,10 +32,17 @@ struct PatchOpticalEvaluator
         const Field32* second_input_fields = nullptr) noexcept
     {
         if(used_branch) *used_branch = nullptr;
-        if(!vertices || (hit.flags & ~(BilinearBoundary | BilinearSingular | BilinearUsedFp64)) != 0u
+        if(!vertices || (hit.flags & ~bilinear_known_hit_flags) != 0u
            || hit.patch_id != patch.patch_id || hit.root_index > 1u
            || !(hit.u >= 0.0f && hit.u <= 1.0f && hit.v >= 0.0f && hit.v <= 1.0f)
            || !(hit.t > 0.0f && finite(hit.t)) || !(hit.residual >= 0.0f && finite(hit.residual)))
+            return PatchOpticalInvalidInput;
+
+        const bool boundary_owned=(hit.flags&BilinearBoundaryOwned)!=0u;
+        if(boundary_owned && (!patch.has_regular_spherical_map()
+           || (hit.flags&BilinearSingular) || !patch_boundary_feature(patch,hit).valid))
+            return PatchOpticalInvalidInput;
+        if((hit.flags&bilinear_boundary_edge_mask) && !(hit.flags&BilinearBoundary))
             return PatchOpticalInvalidInput;
 
         std::uint32_t pending = 0;
@@ -53,7 +60,7 @@ struct PatchOpticalEvaluator
             }
         }
         else if(!patch.has_regular_spherical_map()) return PatchOpticalInvalidInput;
-        if(hit.flags & BilinearBoundary) pending |= PatchOpticalBoundaryPending;
+        if((hit.flags & BilinearBoundary) && !boundary_owned) pending |= PatchOpticalBoundaryPending;
         if(hit.flags & BilinearSingular) pending |= PatchOpticalSingularPending;
         if(pending != 0u) return pending; // no epsilon-area or zero-field substitution
 
@@ -205,7 +212,8 @@ struct PatchOpticalEvaluator
             std::uint32_t flags = 0;
             Contribution contribution{};
             const FoldedBranch* used_branch = nullptr;
-            // The upstream query sorts and removes exact duplicate reports.
+            // The upstream query sorts, removes exact duplicate reports and
+            // selects one owner for certified regular source-grid boundaries.
             // Reject a broken ordering/duplicate contract instead of summing twice.
             if(i != 0u && !strictly_before(input.hits[begin + i - 1u], hit))
                 flags = PatchOpticalInvalidInput;
