@@ -209,6 +209,22 @@ NFの `[u,v]` と、CDFの保存軸 `[phi,theta]` は異なる。
 セル内の平均余弦 `1-U[i]-U[i+1]` を使った積分値であり、
 `g_source`（縮約前）とは用途が違う。正のgはtheta=0への前方性。
 
+### 論文用の位相関数プロット
+
+保存 CDF から、目盛り・軸ラベル・カラーバーを含む論文用 PDF を出力できる。
+日本語は Noto Sans JP、数字と基本的な数式は同梱の Linux Libertine を使用する。
+図内のタイトルやパネル番号は付けず、原稿側でキャプションを組版する。
+
+```bat
+python -m pip install -r tools\requirements-paper.txt
+python tools\plot_phase_cdf_paper.py D:\rainbow_dataset\records\i0000\w0000 --out outputs\paper\phase.pdf --language ja --width-mm 170 --height-mm 95 --font-size 8
+```
+
+PDF と同じ stem の JSON に入力条件、正規化の検証結果、色の範囲、フォントを保存する。
+既存の CDF 読み込み・復元を再利用し、確率密度の平滑化や再正規化は行わない。
+掲載寸法、共通カラースケール、Noto Sans JP の明示指定、LaTeX への挿入方法は
+[論文用図の手順](tools/PAPER_FIGURES.md) を参照。
+
 ### レンダラへの接続
 
 粒子から光源を見る方向を `sL`、粒子からカメラを見る方向を `sC` とすると、
