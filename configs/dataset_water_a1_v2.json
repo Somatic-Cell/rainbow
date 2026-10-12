@@ -1,0 +1,34 @@
+{
+  "output_root": "datasets/water_a15_380_830",
+  "generator": "build/Release/rainbow_generate.exe",
+  "radius_mm": 1.0,
+  "force_sphere": false,
+  "temperature_c": 20.0,
+  "pressure_pa": 101325.0,
+  "wavelengths": {
+    "start_nm": 380,
+    "stop_nm": 830,
+    "step_nm": 5
+  },
+  "inclinations": {
+    "min_degrees": -90,
+    "max_degrees": 90,
+    "count": 300,
+    "placement": "linear_angle_cell_centers"
+  },
+  "solver": {
+    "grid": 3001,
+    "query_theta": 1800,
+    "query_phi": 3600,
+    "cdf_theta": 900,
+    "cdf_phi": 1800,
+    "stage": "diffraction",
+    "device": 0,
+    "focal_offsets": [0, 0, 0, 0],
+    "allow_underresolved": false,
+    "maximum_coarsening_tv": 1.0,
+    "cdf_max_l1": 1e-10,
+    "cdf_max_lost_mass": 1e-12
+  },
+  "reserve_gib": 100
+}

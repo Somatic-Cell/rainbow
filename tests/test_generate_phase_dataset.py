@@ -155,4 +155,244 @@ class BatchTests(unittest.TestCase):
         self.cfg.write_text('{"a": NaN}')
         with self.assertRaises(ValueError):batch.load_json(self.cfg)
 
+
+
+
+# A log-format fixture, NOT a numerical simulation or ground-truth computation.
+CDF_REJECTION = """rainbow_generate: CDF input rejected: max_intensity=6.62286, invalid_values=653, incomplete=653, underresolved=43200, malformed=0, first_problem=1644082, L1=0, lost_mass=0, weight_underflow=0
+[cdf-input] stage=diffraction directions=6480000 allow_underresolved=1 CDF_accumulation_started=0
+[cdf-input] stage=incoherent invalid_values=0 incomplete=1 underresolved=0 first_hard_problem=1687286
+[cdf-input] optical flags=64 query_flags=48 known_hits_complete=0 hit_count=6 evaluated_hits=2 rejected_hits=4 refinement_hits=0 boundary_hits=4 singular_hits=0 folded_evaluated_hits=0 first_problem_patch_id=32956688
+[cdf-input] focal flags=2 valid=0 corrected_hits=2 first_problem_patch_id=32956688 intensity_s=nan intensity_p=nan family_hits=1,1,0,0
+"""
+
+
+class FailureTests(unittest.TestCase):
+    # Reuse fixtures only, without inheriting/rerunning the original test cases.
+    setUp = BatchTests.setUp
+    save = BatchTests.save
+    invoke = BatchTests.invoke
+    mock_generate = BatchTests.mock_generate
+    run_some = BatchTests.run_some
+
+    def fail_job(self, cmd, **kwargs):
+        self.calls.append(cmd)
+        kwargs["stdout"].write(CDF_REJECTION.encode())
+        return types.SimpleNamespace(returncode=1)
+
+    def failures_then_success(self, failed_calls):
+        counter = 0
+        def action(cmd, **kwargs):
+            nonlocal counter
+            current = counter
+            counter += 1
+            return (self.fail_job if current in failed_calls else self.mock_generate)(cmd, **kwargs)
+        return action
+
+    def state(self):
+        return json.loads((self.out/"progress.json").read_text())
+
+    def log_fixture(self, text=CDF_REJECTION):
+        log = self.root/"fixture.log"
+        log.write_text(text)
+        return log
+
+    def test_recognizes_supplied_failure_format(self):
+        detail = batch.inspect_job_failure(self.log_fixture(), 1)
+        self.assertTrue(detail["continuable"])
+        self.assertEqual(detail["category"], "cdf_input_boundary_pending")
+        self.assertIn("intensity_s=nan", detail["cdf_diagnostic_lines"][-1])
+        json.dumps(detail, allow_nan=False)
+
+    def test_rejects_signal_or_success_codes(self):
+        for rc in (0, -9, 139, 3221225477):
+            self.assertFalse(batch.inspect_job_failure(self.log_fixture(), rc)["continuable"])
+
+    def test_underresolution_only_is_not_deferred(self):
+        text = CDF_REJECTION.replace("invalid_values=653, incomplete=653", "invalid_values=0, incomplete=0")
+        self.assertFalse(batch.inspect_job_failure(self.log_fixture(text), 1)["continuable"])
+
+    def test_requires_pre_accumulation_marker(self):
+        for text in (CDF_REJECTION.replace("CDF_accumulation_started=0", "CDF_accumulation_started=1"),
+                     "\n".join(line for line in CDF_REJECTION.splitlines() if "directions=6480000" not in line)):
+            self.assertFalse(batch.inspect_job_failure(self.log_fixture(text), 1)["continuable"])
+
+    def test_missing_rejection_header_is_fatal(self):
+        text = "\n".join(CDF_REJECTION.splitlines()[1:])
+        self.assertFalse(batch.inspect_job_failure(self.log_fixture(text), 1)["continuable"])
+
+    def test_log_tail_has_memory_limit_and_fails_closed(self):
+        log = self.log_fixture(CDF_REJECTION + "x"*(300 << 10))
+        self.assertFalse(batch.inspect_job_failure(log, 1)["continuable"])
+
+    def test_real_subprocess_log_transport(self):
+        # An actual child process emits the fixture and exits 1. No GPU involved.
+        import subprocess, sys
+        log = self.root/"child.log"
+        with log.open("wb") as stream:
+            result = subprocess.run([sys.executable, "-c", "import sys;sys.stdout.write("+repr(CDF_REJECTION)+");sys.exit(1)"],
+                                    stdout=stream, stderr=subprocess.STDOUT, check=False)
+        self.assertTrue(batch.inspect_job_failure(log, result.returncode)["continuable"])
+
+    def test_defer_then_continue_without_accepting_bad_data(self):
+        with patch.object(batch.subprocess, "run", side_effect=self.failures_then_success({0})):
+            self.assertEqual(self.invoke("--execute", "--continue-on-error"), 2)
+        self.assertEqual(len(self.calls), 4)
+        self.assertEqual(self.state()["completed"], 3)
+        self.assertEqual(self.state()["failed"], 1)
+        self.assertEqual(self.state()["unattempted"], 0)
+        self.assertFalse(self.state()["complete"])
+        self.assertFalse((self.out/"records/i0000/w0000").exists())
+        self.assertFalse((self.out/"receipts/i0000_w0000.json").exists())
+        failures = json.loads((self.out/"failures.json").read_text())
+        self.assertEqual(failures["count"], 1)
+        self.assertEqual(failures["jobs"][0]["job"], "i0000_w0000")
+
+    def test_original_stop_policy_remains_default(self):
+        with patch.object(batch.subprocess, "run", side_effect=self.fail_job):
+            with self.assertRaises(RuntimeError): self.invoke("--execute")
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.state()["completed"], 0)
+        self.assertTrue((self.out/"failures/i0000_w0000.json").exists())
+
+    def test_resume_skips_only_known_failure_when_explicit(self):
+        with patch.object(batch.subprocess, "run", side_effect=self.failures_then_success({0})):
+            self.assertEqual(self.invoke("--execute", "--continue-on-error", "--limit", "2"), 2)
+        with patch.object(batch.subprocess, "run", side_effect=self.mock_generate):
+            self.assertEqual(self.invoke("--execute", "--continue-on-error", "--resume"), 2)
+        self.assertEqual(len(self.calls), 4)
+        self.assertEqual(self.state()["completed"], 3)
+        self.assertEqual(self.state()["failed"], 1)
+
+    def test_resume_without_continue_does_not_silently_skip(self):
+        with patch.object(batch.subprocess, "run", side_effect=self.fail_job):
+            self.invoke("--execute", "--continue-on-error", "--limit", "1")
+        with self.assertRaises(RuntimeError): self.invoke("--execute", "--resume")
+
+    def test_retries_failures_only_and_preserves_history(self):
+        with patch.object(batch.subprocess, "run", side_effect=self.failures_then_success({0})):
+            self.invoke("--execute", "--continue-on-error")
+        original = (self.out/"logs/i0000_w0000.log").read_bytes()
+        with patch.object(batch.subprocess, "run", side_effect=self.mock_generate) as run:
+            self.assertEqual(self.invoke("--execute", "--resume", "--retry-failed"), 0)
+            self.assertEqual(run.call_count, 1)
+        self.assertTrue(self.state()["complete"])
+        self.assertEqual(self.state()["failed"], 0)
+        history=json.loads((self.out/"failures/i0000_w0000.json").read_text())
+        self.assertEqual(history["state"], "resolved")
+        self.assertEqual(len(history["attempts"]), 1)
+        self.assertEqual((self.out/"logs/i0000_w0000.log").read_bytes(), original)
+        self.assertEqual(len(list((self.out/"logs").glob("i0000_w0000*.log"))), 2)
+
+    def test_retry_does_not_run_unattempted_jobs(self):
+        with patch.object(batch.subprocess, "run", side_effect=self.fail_job):
+            self.invoke("--execute", "--continue-on-error", "--limit", "1")
+        with patch.object(batch.subprocess, "run", side_effect=self.mock_generate) as run:
+            self.assertEqual(self.invoke("--execute", "--resume", "--retry-failed"), 0)
+            self.assertEqual(run.call_count, 1)
+        self.assertEqual(self.state()["completed"], 1)
+        self.assertEqual(self.state()["unattempted"], 3)
+        self.assertFalse(self.state()["complete"])
+
+    def test_failed_retry_is_not_an_infinite_loop(self):
+        with patch.object(batch.subprocess, "run", side_effect=self.fail_job):
+            self.invoke("--execute", "--continue-on-error", "--limit", "1")
+        with patch.object(batch.subprocess, "run", side_effect=self.fail_job) as run:
+            self.assertEqual(self.invoke("--execute", "--resume", "--retry-failed", "--continue-on-error"), 2)
+            self.assertEqual(run.call_count, 1)
+        history=json.loads((self.out/"failures/i0000_w0000.json").read_text())
+        self.assertEqual(len(history["attempts"]), 2)
+
+    def test_total_failure_limit_stops(self):
+        with patch.object(batch.subprocess, "run", side_effect=self.fail_job):
+            with self.assertRaises(RuntimeError):
+                self.invoke("--execute", "--continue-on-error", "--max-job-failures", "1")
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.state()["status"], "stopped_error")
+
+    def test_consecutive_failure_limit_stops(self):
+        with patch.object(batch.subprocess, "run", side_effect=self.fail_job):
+            with self.assertRaises(RuntimeError):
+                self.invoke("--execute", "--continue-on-error", "--max-consecutive-failures", "2")
+        self.assertEqual(len(self.calls), 2)
+
+    def test_success_resets_consecutive_counter(self):
+        with patch.object(batch.subprocess, "run", side_effect=self.failures_then_success({0, 2})):
+            self.assertEqual(self.invoke("--execute", "--continue-on-error", "--max-consecutive-failures", "2"), 2)
+        self.assertEqual(len(self.calls), 4)
+        self.assertEqual(self.state()["failed"], 2)
+
+    def test_unrecognized_exit_always_stops(self):
+        def crash(cmd, **kwargs):
+            self.calls.append(cmd)
+            kwargs["stdout"].write(b"CUDA out of memory\n")
+            return types.SimpleNamespace(returncode=1)
+        with patch.object(batch.subprocess, "run", side_effect=crash):
+            with self.assertRaises(RuntimeError): self.invoke("--execute", "--continue-on-error")
+        self.assertEqual(len(self.calls), 1)
+        with self.assertRaises(RuntimeError): self.invoke("--execute", "--resume", "--continue-on-error")
+
+    def test_failure_with_part_is_preserved_and_stops(self):
+        def partial(cmd, **kwargs):
+            out=Path(cmd[cmd.index("--out")+1]+".part")
+            out.mkdir();(out/"keep").write_text("never delete")
+            return self.fail_job(cmd, **kwargs)
+        with patch.object(batch.subprocess, "run", side_effect=partial):
+            with self.assertRaises(RuntimeError): self.invoke("--execute", "--continue-on-error")
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual((self.out/"records/i0000/w0000.part/keep").read_text(), "never delete")
+        with self.assertRaises(ValueError): self.invoke("--execute", "--resume", "--continue-on-error")
+
+    def test_failure_with_final_output_is_not_adopted(self):
+        def partial(cmd, **kwargs):
+            self.mock_generate(cmd, **kwargs)
+            kwargs["stdout"].write(CDF_REJECTION.encode())
+            return types.SimpleNamespace(returncode=1)
+        with patch.object(batch.subprocess, "run", side_effect=partial):
+            with self.assertRaises(RuntimeError): self.invoke("--execute", "--continue-on-error")
+        self.assertTrue((self.out/"records/i0000/w0000").exists())
+        self.assertFalse((self.out/"receipts/i0000_w0000.json").exists())
+
+    def test_successful_exit_with_bad_output_still_stops(self):
+        def malformed(cmd, **kwargs):
+            r=self.mock_generate(cmd, **kwargs)
+            out=Path(cmd[cmd.index("--out")+1]);(out/"u_edges.npy").write_bytes(b"bad")
+            return r
+        with patch.object(batch.subprocess, "run", side_effect=malformed):
+            with self.assertRaises(ValueError): self.invoke("--execute", "--continue-on-error")
+        self.assertEqual(len(self.calls), 1)
+
+    def test_binary_change_is_not_a_retry_bypass(self):
+        with patch.object(batch.subprocess, "run", side_effect=self.fail_job):
+            self.invoke("--execute", "--continue-on-error", "--limit", "1")
+        self.exe.write_bytes(b"modified")
+        with self.assertRaises(ValueError): self.invoke("--execute", "--resume", "--retry-failed", "--continue-on-error")
+
+    def test_failure_ledger_signature_is_checked(self):
+        with patch.object(batch.subprocess, "run", side_effect=self.fail_job):
+            self.invoke("--execute", "--continue-on-error", "--limit", "1")
+        p=self.out/"failures/i0000_w0000.json";v=json.loads(p.read_text());v["signature"]="bad";p.write_text(json.dumps(v))
+        with self.assertRaises(ValueError): self.invoke("--execute", "--resume", "--continue-on-error")
+
+    def test_retry_requires_resume(self):
+        with self.assertRaises(ValueError): self.invoke("--retry-failed")
+
+    def test_failure_limits_must_be_positive(self):
+        for option in ("--max-job-failures", "--max-consecutive-failures"):
+            with self.assertRaises(ValueError): self.invoke(option, "0")
+
+    def test_continue_dry_run_writes_nothing(self):
+        self.assertEqual(self.invoke("--continue-on-error", "--dry-run"), 0)
+        self.assertFalse(self.out.exists())
+
+    def test_receipt_commit_before_failure_resolution_is_reconciled(self):
+        with patch.object(batch.subprocess, "run", side_effect=self.failures_then_success({0})):
+            self.invoke("--execute", "--continue-on-error")
+        with patch.object(batch.subprocess, "run", side_effect=self.mock_generate):
+            self.invoke("--execute", "--resume", "--retry-failed")
+        path=self.out/"failures/i0000_w0000.json";v=json.loads(path.read_text());v["state"]="unresolved";path.write_text(json.dumps(v))
+        with patch.object(batch.subprocess, "run", side_effect=AssertionError("must not rerun")):
+            self.assertEqual(self.invoke("--execute", "--resume"), 0)
+        self.assertEqual(json.loads(path.read_text())["state"], "resolved")
+
 if __name__=="__main__":unittest.main()

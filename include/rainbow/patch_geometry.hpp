@@ -1,6 +1,7 @@
 #pragma once
 
 #include <rainbow/outgoing_patch.hpp>
+#include <rainbow/patch_regular64.hpp>
 #include <cmath>
 #include <limits>
 
@@ -200,6 +201,21 @@ struct PatchConstruction
                 {
                     patch.status=orientation>0?PatchCellStatus::RegularPositive:PatchCellStatus::RegularNegative;
                     patch.signed_solid_angle_sr=angle;
+                }
+            }
+            // Preserve the existing FP32 fast path, including its metric bits.
+            // NeedsRefinement means "not certified", not "proven folded".
+            // Recheck the SAME stored corners before invoking folded handling.
+            if(patch.status==PatchCellStatus::NeedsRefinement)
+            {
+                const int precise_orientation=RegularPatch64::certified_orientation(geometry.corners);
+                float precise_angle=0.0f;
+                if(precise_orientation!=0
+                   && RegularPatch64::try_metric(geometry.corners,precise_orientation,precise_angle))
+                {
+                    patch.status=precise_orientation>0
+                        ?PatchCellStatus::RegularPositive:PatchCellStatus::RegularNegative;
+                    patch.signed_solid_angle_sr=precise_angle;
                 }
             }
         }

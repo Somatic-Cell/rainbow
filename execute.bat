@@ -72,22 +72,41 @@ if not exist outputs mkdir outputs
 
 @REM echo Audit exit: %ERRORLEVEL%
 
-if not exist outputs\unpolarized_a1_g129 mkdir outputs\unpolarized_a1_g129
+@REM if not exist outputs\unpolarized_a1_g129 mkdir outputs\unpolarized_a1_g129
 
-build\Release\rainbow_generate.exe ^
-    --out datasets\drop_a1_i20_700nm_q1800x3600_c90x1800 ^
-    --radius-mm 1.0 ^
-    --wavelength-nm 700 ^
-    --temperature-c 20 ^
-    --pressure-pa 101325 ^
-    --grid 3001 ^
-    --inclination-deg 20 ^
-    --query-theta 1800 ^
-    --query-phi 3600 ^
-    --cdf-theta 900 ^
-    --cdf-phi 1800 ^
-    --stage diffraction ^
-    --focal-offsets 0,0,0,0 ^
-    --allow-underresolved
+@REM build\Release\rainbow_generate.exe ^
+@REM     --out datasets\drop_a1_i20_700nm_q1800x3600_c90x1800 ^
+@REM     --radius-mm 1.0 ^
+@REM     --wavelength-nm 700 ^
+@REM     --temperature-c 20 ^
+@REM     --pressure-pa 101325 ^
+@REM     --grid 3001 ^
+@REM     --inclination-deg 20 ^
+@REM     --query-theta 1800 ^
+@REM     --query-phi 3600 ^
+@REM     --cdf-theta 900 ^
+@REM     --cdf-phi 1800 ^
+@REM     --stage diffraction ^
+@REM     --focal-offsets 0,0,0,0 ^
+@REM     --allow-underresolved
+
+@REM echo Exit code: %ERRORLEVEL%
+
+generate_dataset.bat ^
+    --config configs\dataset_water_a1.json ^
+    --inclination-count 300 ^
+    --wavelength-range 380 830 5 ^
+    --out-root datasets\water_a1_i300_380_830 ^
+    --allow-underresolved ^
+    --execute ^
+    --resume ^
+    --register-generation "regular_patch_fp64_v1" ^
+    --previous-generator outputs\before_regular_fp64_fix\rainbow_generate.exe ^
+    --retry-failed-and-pending ^
+    --retire-uncommitted ^
+    --continue-on-error ^
+    --recover-commits ^
+    --max-consecutive-failures 200 ^
+    --max-job-failures 1000
 
 echo Exit code: %ERRORLEVEL%

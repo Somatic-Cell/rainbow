@@ -11,7 +11,7 @@ set(TARGET_NAME ${PROJECT_NAME})
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(
         CMAKE_CUDA_ARCHITECTURES
-        86                              # JP: 適時自身の環境に合わせて変更する
+        120                              # JP: 適時自身の環境に合わせて変更する
         CACHE STRING
         "CUDA architectures to build for"
     )

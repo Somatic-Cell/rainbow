@@ -125,3 +125,46 @@ if(BUILD_TESTING)
         rainbow_water_optics_cpu
         PROPERTIES LABELS "cpu;material")
 endif()
+
+target_sources(rainbow_generate PRIVATE
+    "${PROJECT_SOURCE_DIR}/src/projected_area.cpp")
+
+# 投影面積の凸性検査で使用する，区間演算の計算規約を維持する．
+if(MSVC)
+    set_source_files_properties(
+        "${PROJECT_SOURCE_DIR}/src/projected_area.cpp"
+        PROPERTIES COMPILE_OPTIONS "/fp:strict")
+else()
+    set_source_files_properties(
+        "${PROJECT_SOURCE_DIR}/src/projected_area.cpp"
+        PROPERTIES COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off")
+endif()
+
+if(BUILD_TESTING)
+    add_executable(rainbow_projected_area_cpu_tests
+        "${PROJECT_SOURCE_DIR}/tests/test_projected_area_cpu.cpp"
+        "${PROJECT_SOURCE_DIR}/src/projected_area.cpp")
+
+    target_include_directories(rainbow_projected_area_cpu_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/include")
+    target_compile_features(rainbow_projected_area_cpu_tests PRIVATE cxx_std_20)
+    rainbow_configure_host(rainbow_projected_area_cpu_tests)
+
+    add_test(
+        NAME rainbow_projected_area_cpu
+        COMMAND rainbow_projected_area_cpu_tests)
+    set_tests_properties(
+        rainbow_projected_area_cpu
+        PROPERTIES LABELS "cpu;geometry")
+
+    if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME rainbow_dataset_batch_python
+            COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+                -s "${PROJECT_SOURCE_DIR}/tests"
+                -p test_generate_phase_dataset.py -v)
+        set_tests_properties(
+            rainbow_dataset_batch_python
+            PROPERTIES LABELS "python;dataset")
+    endif()
+endif()

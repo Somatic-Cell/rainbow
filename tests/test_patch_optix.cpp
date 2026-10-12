@@ -1,4 +1,5 @@
 #include "patch_validation.hpp"
+#include "regular64_regression.hpp"
 
 #include <rainbow/patch_accel.hpp>
 #include <rainbow/raindrop_tracer.hpp>
@@ -63,6 +64,17 @@ int run(const std::filesystem::path& patch_module,const std::filesystem::path& t
         accel.build(source,config);
         verify_download(accel,vertices);
         require_patch(accel.statistics().patch_count==2,"Folded geometry was silently discarded.");
+
+        // Exercise the production classify/compact CUDA kernels on the exact
+        // stored regression corners; no full 3001-grid retrace is needed here.
+        vertices=regular64_regression_vertices();
+        upload_vertices(source,vertices,cuda_context);
+        accel.build(source,config);
+        verify_download(accel,vertices);
+        require_patch(accel.statistics().count(PatchCellStatus::RegularNegative)==1
+                   && accel.statistics().count(PatchCellStatus::RegularPositive)==1
+                   && accel.statistics().count(PatchCellStatus::NeedsRefinement)==2,
+                      "CUDA FP64 fallback failed or accepted a fold/degeneracy.");
 
         // Rebuild with no outgoing corners. An empty result is not a dummy GAS.
         for(auto& vertex:vertices) vertex.status=VertexStatus::Miss;
